@@ -1,0 +1,210 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: factorial-workflow-
+spec:
+  entrypoint: main
+  arguments:
+    parameters:
+    - name: expression
+      value: "10!-7!/3! + 6!*5!"
+  templates:
+  # template to get the array of numbers for which we need to calculate factorial
+  - name: get-nums-from-expression
+    inputs:
+      parameters:
+      - name: expression
+    script:
+      image: node:9.1-alpine
+      command: [node]
+      source: |
+        let expression = "{{inputs.parameters.expression}}"; 
+        expression = expression.trim();
+        let a = expression.split("!");
+        let f_nums = new Array();
+        for(let i=0; i<a.length-1;i++) {
+            f_nums.push(0);
+            // get the number for which we need to calculate factorial
+            for(j=a[i].length-1, k=0; j>=0; j--,k++){
+                if(!(a[i][j] >= '0' && a[i][j] <= '9')){
+                    break;
+                } else {
+                    f_nums[i] += (a[i][j]-'0') * Math.pow(10, k);
+                }
+            }
+        }
+        console.log(JSON.stringify(f_nums));
+
+  # template to calculate factorial for a given number
+  - name: calculate-factorial
+    inputs:
+      parameters:
+      - name: num
+    script:
+      image: node:9.1-alpine
+      command: [node]
+      source: |
+        let n = {{=inputs.parameters.num}}
+        let factorial = 1;
+        if(n<2)
+          console.log(factorial)
+        else{
+          for(let i=n; i>=2; i--){
+            factorial = factorial * i;
+          }
+          console.log(factorial)
+        } 
+
+  # template to evaluate the final value of expression
+  - name: evaluate-exp
+    inputs:
+      parameters:
+      - name: expression
+      - name: nums
+      - name: factorials
+    script:
+      image: node:9.1-alpine
+      command: [node]
+      source: |
+        let expression = "{{ inputs.parameters.expression }}";
+        let factorials = "{{ inputs.parameters.factorials }}";
+        let nums = "{{ inputs.parameters.nums }}";
+        // console.log(expression, factorials, nums)
+        // console.log(typeof(factorials), typeof(nums));
+        factorials = JSON.parse(factorials);
+        nums = JSON.parse(nums);
+        // console.log(typeof(factorials), typeof(nums));
+        
+        let numToNumFactorialMap = new Map();
+        for(let i = 0; i < nums.length; i++){
+            numToNumFactorialMap.set(nums[i]+"!", factorials[i]);
+        }
+        let operatorStack = new Array();
+        let operandStack = new Array();
+        function performArithmaticOperation(num1, num2, operator){
+          switch(operator){
+            case '+':
+              return num1 + num2;
+            break;
+            case '-':
+              return num1 - num2;
+            break;
+            case '*':
+              return num1 * num2;
+            break;
+            case '/':
+              if(num2 > 0)
+                  return (num1 / num2);
+              else
+                  return 0;
+            break;
+            default: return 0;
+          }
+        }
+
+        function getPrecedence(operator){
+          switch(operator){
+            case '+':
+              return 2;
+            case '-':
+              return 1;
+            case '/':
+              return 4;
+            case '*': 
+              return 3;
+            case '(':
+              return 0;
+          }
+        }
+
+        function isTopOperatorOfGreaterOrEqualPrecedence(operatorOnTopOfStack, currentOperator) {
+          return getPrecedence(currentOperator) <= getPrecedence(operatorOnTopOfStack)
+        }
+
+        function performOneOperation(operatorStack, operandStack){
+          let num2 = operandStack[operandStack.length-1];
+          operandStack.pop();
+          let num1 = operandStack[operandStack.length-1];
+          operandStack.pop();
+          operandStack.push(performArithmaticOperation(num1, num2, operatorStack[operatorStack.length-1]));
+          operatorStack.pop();
+          // console.log("inside performOneOperation " ,operandStack, operatorStack);
+          return [operatorStack, operandStack];
+        }
+
+        for(let i = 0; i<expression.length; i++){
+            if(expression[i]>='0' && expression[i]<='9'){
+                let num_key = "";
+                while(i<expression.length && expression[i]!='!'){
+                    num_key += expression[i];
+                    i++;
+                }
+                num_key += '!';
+                operandStack.push(numToNumFactorialMap.get(num_key));
+                // console.log("operandStack " + operandStack);
+            } else {
+                switch(expression[i]){
+                    case '+':
+                    case '-':
+                    case '/':
+                    case '*':
+                        // console.log("inside switch 118 " , operatorStack);
+                        if(operatorStack.length > 0) {
+                            // console.log(i, expression[i], operatorStack[operatorStack.length-1], operatorStack.length)
+                            while(isTopOperatorOfGreaterOrEqualPrecedence(operatorStack[operatorStack.length-1], expression[i])){
+                                [operatorStack, operandStack] = performOneOperation(operatorStack, operandStack);
+                                // console.log("inside switch -> if -> while 123 ", operandStack, operatorStack);   
+                            }
+                        }//"(10! - 7!) / (3! + 6! * 5!)";
+                        operatorStack.push(expression[i]);
+                        // console.log("inside switch -> after if", operandStack, operatorStack); 
+                        break;
+                    case '(':
+                        operatorStack.push(expression[i]);
+                        break;
+                    case ')':
+                        // console.log("found )")
+                        while(operatorStack[operatorStack.length-1]!='('){
+                            [operatorStack, operandStack] = performOneOperation(operatorStack, operandStack);
+                            // console.log("case ) switch -> inside while 135 ", operandStack, operatorStack);
+                        }
+                        operatorStack.pop();
+                        // console.log("case ) switch -> after while 138 ", operandStack, operatorStack); 
+                        break;
+                    
+                }
+            }
+        }
+        while(operatorStack.length > 0){
+          [operatorStack, operandStack] = performOneOperation(operatorStack, operandStack);
+        }
+        // console.log(operandStack, operatorStack);
+        console.log(operandStack[0])
+        
+  - name: main
+    steps:
+    - - name: get-nums-array-from-expression
+        template: get-nums-from-expression
+        arguments:
+          parameters:
+          - name: expression
+            value: "{{ workflow.parameters.expression }}"
+
+    - - name: calculate-factorials-parallely
+        template: calculate-factorial
+        arguments:
+          parameters:
+          - name: num
+            value: "{{item}}"
+        withParam: "{{steps.get-nums-array-from-expression.outputs.result}}"
+
+    - - name: evaluate-expression-value
+        template: evaluate-exp
+        arguments:
+          parameters:
+          - name: expression
+            value: "{{ workflow.parameters.expression}}"
+          - name: nums
+            value: "{{steps.get-nums-array-from-expression.outputs.result}}"
+          - name: factorials
+            value: "{{steps.calculate-factorials-parallely.outputs.result}}"
